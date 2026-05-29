@@ -1,0 +1,11 @@
+venvs/
+models/
+logs/
+joeynmt-hotfixed/
+data/
+tools/
+translations/
+*.pyc
+__pycache__/
+.DS_Store
+

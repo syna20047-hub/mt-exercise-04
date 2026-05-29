@@ -1,81 +1,178 @@
-# MT Exercise 4: Byte Pair Encoding, Beam Search
+# MT Exercise 4
 
-This repository is a starting point for the 4th and final exercise. As before, fork this repo to your own account and then clone it into your preferred directory.
+This repository contains my experiments for MT Exercise 4 on Byte Pair Encoding and beam search.
 
----
+## Language Direction
 
-## Requirements
+I used the translation direction:
 
-- Python 3.10 must be installed. The command `python3` (or `python` on Windows) should be available from your terminal or command prompt.
-- `virtualenv` must be installed. Install it with:
+English → Italian
 
-  ```bash
-  pip install virtualenv
+The training, development, and test data were downloaded with the provided Hugging Face data script.
 
-macOS/Linux users: No special setup needed; shell scripts should run normally.
+## Setup
 
-Windows users: Either use Windows Subsystem for Linux (WSL) or a Unix-compatible shell like Git Bash.
-If you're using PowerShell or Command Prompt, manual setup is required.
+I first created and activated the virtual environment:
 
-### Setup Instructions
+```bash
+bash scripts/make_virtualenv.sh
+source venvs/torch3/bin/activate
+```
 
-## For macOS / Linux / WSL / Git Bash users
+Then I downloaded the Moses scripts:
 
-Clone your fork of the repository + Create a virtual environment:
-   ```
-   git clone https://github.com/[your-username]/mt-exercise-4
-   cd mt-exercise-4 
+```bash
+bash scripts/download_moses.sh
+```
 
-   ```
-    ./scripts/make_virtualenv.sh
+I also installed the required Python packages:
 
-Important: Then activate the env by executing the source command that is output by the shell script above.
+```bash
+pip install subword-nmt pandas matplotlib
+```
 
-Install required dependencies - Follow the instructions provided in the exercise PDF.
+Because the Hugging Face dataset loader did not work with the initially installed package versions, I used:
 
-Download data:
+```bash
+pip uninstall -y datasets huggingface_hub
+pip install "datasets==3.6.0" "huggingface_hub==0.24.7"
+```
 
-       python ./scripts/download_huggingface_data.py --src en --trg nl --out data
+I installed the hotfixed JoeyNMT version in editable mode:
 
-You can choose any supported direction except `de-en`. Good options are `en-nl`, `en-it`, `en-ro`, `nl-en`, `it-en`, or `ro-en`.
+```bash
+git clone https://github.com/moritz-steiner/joeynmt-hotfixed.git
+cd joeynmt-hotfixed
+pip install -e .
+cd ..
+```
 
+During training, I also had to remove the deprecated `verbose` argument from `ReduceLROnPlateau` in `joeynmt-hotfixed/joeynmt/builders.py`, because it caused a compatibility error with the installed PyTorch version.
 
-Train the model:
+## Data Download
 
-       ./scripts/train.sh
+I downloaded the English–Italian IWSLT 2017 data with:
 
-*the training process can be interrupted at any time. The best checkpoint will always be saved automatically.
+```bash
+python scripts/download_huggingface_data.py --src en --trg it
+```
 
-Evaluate the model:
+The script created 100,000 sentence pairs for training.
 
-       ./scripts/evaluate.sh
+## Preprocessing
 
-## For Windows (Command Prompt / PowerShell users)
-Manually create and activate a virtual environment:
+I added the following preprocessing scripts:
 
-        python -m venv mt_env
-        mt_env\Scripts\activate
+```text
+scripts/preprocess_tokenize.sh
+scripts/preprocess_bpe_2k.sh
+scripts/preprocess_bpe_5k.sh
+```
 
-Note: The make_virtualenv.sh script will not work in native Windows shells.
+First, I tokenized the data with Moses:
 
-Manually download the dataset
+```bash
+bash scripts/preprocess_tokenize.sh
+```
 
-Use the Python downloader script directly, for example:
+Then I created BPE data with two different vocabulary sizes:
 
-       python scripts/download_huggingface_data.py --src en --trg nl --out data
+```bash
+bash scripts/preprocess_bpe_2k.sh
+bash scripts/preprocess_bpe_5k.sh
+```
 
-If you want a different language pair, replace `--src` and `--trg` with one of the supported directions listed above.
+For BPE, I learned joint BPE codes on the concatenated English and Italian training data. I also used vocabulary filtering with language-specific vocabularies and then created a final joint vocabulary file for JoeyNMT.
 
-Modify, train, and evaluate
-Once setup is complete, use the instructions in the exercise PDF to run training and evaluation (either by adapting the .sh scripts manually, or by using Git Bash/WSL).
+## Models
 
-#### Notes for Windows Users
+I trained three models:
 
-  Using Git Bash or WSL is highly recommended for compatibility.
+| Model   | BPE | Vocabulary size | Config               |
+| ------- | --: | --------------: | -------------------- |
+| word_2k |  no |            2000 | configs/word_2k.yaml |
+| bpe_2k  | yes |            2000 | configs/bpe_2k.yaml  |
+| bpe_5k  | yes |            5000 | configs/bpe_5k.yaml  |
 
-  If using native PowerShell or Command Prompt:
+Training was run with:
 
-  Manual recreation of shell script steps will be necessary.
+```bash
+bash scripts/train.sh word_2k
+bash scripts/train.sh bpe_2k
+bash scripts/train.sh bpe_5k
+```
 
-  Always activate your virtual environment before running any training or evaluation steps.
+Evaluation was run with:
+
+```bash
+bash scripts/evaluate.sh word_2k
+bash scripts/evaluate.sh bpe_2k
+bash scripts/evaluate.sh bpe_5k
+```
+
+## BLEU Results
+
+| Model   | BPE | Vocabulary size | BLEU |
+| ------- | --: | --------------: | ---: |
+| word_2k |  no |            2000 | 11.4 |
+| bpe_2k  | yes |            2000 | 20.4 |
+| bpe_5k  | yes |            5000 | 21.0 |
+
+The word-level model performed clearly worse than both BPE models. This is expected because the word-level model used a vocabulary limit of only 2000 words, so many rare words were mapped to `<unk>`. The BPE models could split rare words into subword units and therefore preserved more information.
+
+The best model was `bpe_5k`, with a BLEU score of 21.0.
+
+## Manual Translation Inspection
+
+I manually compared the model outputs with the source and reference translations.
+
+A clear difference was that the word-level model produced many `<unk>` tokens. This happened because rare words were outside the limited word vocabulary. For example, in sentences containing rare words or names such as “marshmallow” or “Peter Skillman,” the word-level model often produced `<unk>`, while the BPE models could preserve these words or approximate them with subword units.
+
+The BPE models produced more complete translations and kept more content from the source sentences. The difference between `bpe_2k` and `bpe_5k` was smaller than the difference between the word-level model and the BPE models. Overall, the manual inspection supports the BLEU results: BPE was much better than the word-level vocabulary, and `bpe_5k` was slightly better than `bpe_2k`.
+
+## Beam Size Experiment
+
+For the beam-size experiment, I used the best model, `bpe_5k`.
+
+I added:
+
+```text
+scripts/beam_experiment.sh
+scripts/plot_beam_results.py
+beam_results.csv
+beam_size_vs_bleu.png
+beam_size_vs_time.png
+```
+
+The beam experiment was run with:
+
+```bash
+bash scripts/beam_experiment.sh
+```
+
+The results were:
+
+| Beam size | BLEU | Time in seconds |
+| --------: | ---: | --------------: |
+|         1 | 19.5 |              59 |
+|         2 | 20.6 |              20 |
+|         3 | 21.0 |              28 |
+|         4 | 21.1 |              40 |
+|         5 | 21.0 |              47 |
+|         6 | 21.1 |              54 |
+|         7 | 21.0 |              66 |
+|         8 | 21.0 |              79 |
+|         9 | 21.1 |              96 |
+|        10 | 21.1 |              98 |
+
+I created two plots:
+
+```text
+beam_size_vs_bleu.png
+beam_size_vs_time.png
+```
+
+The BLEU score increased from beam size 1 to beam size 4. After beam size 4, the BLEU score stayed almost constant around 21.0–21.1. The generation time generally increased for larger beam sizes. Beam size 1 was unusually slow in my measurement, probably due to runtime noise or system load, but from beam size 2 onward the expected trend is visible.
+
+Based on these results, I would choose beam size 4 in future experiments, because it reaches the best BLEU score while still being much faster than larger beam sizes.
 

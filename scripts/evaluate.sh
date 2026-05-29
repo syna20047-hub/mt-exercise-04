@@ -1,41 +1,57 @@
-#! /bin/bash
+#!/bin/bash
+
+set -e
 
 scripts=$(dirname "$0")
 base=$scripts/..
 
-data=$base/sampled_data
 configs=$base/configs
-
 translations=$base/translations
 
 mkdir -p $translations
 
-src=?
-trg=?
-
+src=en
+trg=it
 
 num_threads=4
-device=0
 
-# measure time
+model_name=$1
+
+if [[ -z "$model_name" ]]; then
+    echo "Usage: bash scripts/evaluate.sh MODEL_NAME"
+    echo "Example: bash scripts/evaluate.sh word_2k"
+    echo "Example: bash scripts/evaluate.sh bpe_2k"
+    echo "Example: bash scripts/evaluate.sh bpe_5k"
+    exit 1
+fi
+
+
+# All models use tokenized test input.
+# For BPE models, JoeyNMT applies BPE internally from the config.
+data=$base/data/tok
 
 SECONDS=0
 
-model_name=?
-
-echo "###############################################################################"
+echo "################################################################################"
 echo "model_name $model_name"
+echo "data folder $data"
 
 translations_sub=$translations/$model_name
-
 mkdir -p $translations_sub
 
-CUDA_VISIBLE_DEVICES=$device OMP_NUM_THREADS=$num_threads python -m joeynmt translate $configs/$model_name.yaml < $data/test.$src > $translations_sub/test.$model_name.$trg
+raw_out=$translations_sub/test.$model_name.raw.$trg
+post_out=$translations_sub/test.$model_name.detok.$trg
 
-# compute case-sensitive BLEU 
+# Translate pre-tokenized source input
+OMP_NUM_THREADS=$num_threads python -m joeynmt translate $configs/$model_name.yaml < $data/test.$src > $raw_out
 
-cat $translations_sub/test.$model_name.$trg | sacrebleu $data/test.$trg
+# Postprocess:
+# 1. remove BPE markers if present
+# 2. detokenize Italian
+sed 's/@@ //g' $raw_out | perl $base/tools/moses-scripts/scripts/tokenizer/detokenizer.perl -l $trg > $post_out
 
+# Compute case-sensitive BLEU against original, non-tokenized reference
+cat $post_out | sacrebleu $base/data/test.$trg
 
 echo "time taken:"
 echo "$SECONDS seconds"
